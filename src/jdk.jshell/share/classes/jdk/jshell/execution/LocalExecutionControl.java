@@ -37,6 +37,10 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class LocalExecutionControl extends DirectExecutionControl {
 
+    public static void stopCheck() {
+        System.out.println("johoho");
+    }
+
     private final Object STOP_LOCK = new Object();
     private boolean userCodeRunning = false;
     private ThreadGroup execThreadGroup;

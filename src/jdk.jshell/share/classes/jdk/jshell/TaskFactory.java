@@ -30,6 +30,9 @@ import com.sun.source.tree.Tree;
 import com.sun.source.util.Trees;
 import com.sun.tools.javac.api.JavacTaskImpl;
 import com.sun.tools.javac.util.Context;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDescs;
+import java.lang.constant.MethodTypeDesc;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,12 +54,21 @@ import static jdk.internal.jshell.debug.InternalDebugControl.DBG_GEN;
 import java.io.File;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.Stream;
 import javax.lang.model.util.Elements;
 import javax.tools.FileObject;
 import jdk.jshell.MemoryFileManager.SourceMemoryJavaFileObject;
+import jdk.classfile.Classfile;
+import jdk.classfile.ClassTransform;
+import jdk.classfile.CodeBuilder;
+import jdk.classfile.CodeElement;
+import jdk.classfile.CodeTransform;
+import jdk.classfile.Label;
+import jdk.classfile.instruction.BranchInstruction;
+import jdk.classfile.instruction.LabelTarget;
 import java.lang.Runtime.Version;
 import java.nio.CharBuffer;
 import java.util.function.BiFunction;
@@ -459,10 +471,35 @@ class TaskFactory {
             }
             List<String> list = new ArrayList<>();
             for (OutputMemoryJavaFileObject fo : l) {
-                state.classTracker.setCurrentBytes(fo.getName(), fo.getBytes());
+                state.classTracker.setCurrentBytes(fo.getName(),
+                        Classfile.parse(fo.getBytes())
+                                 .transform(ClassTransform.transformingMethodBodies(
+                                         CodeTransform.ofStateful(ThreadStopInstrumentor::new))));
                 list.add(fo.getName());
             }
             return list;
+        }
+
+
+        static final class ThreadStopInstrumentor implements CodeTransform {
+            private static final ClassDesc THREAD_STOPPER_CLASS = ClassDesc.of("jdk.jshell.execution.LocalExecutionControl");
+            private static final String THREAD_STOPPER_METHOD_NAME = "stopCheck";
+            private static final MethodTypeDesc THREAD_STOPPER_METHOD_TYPE = MethodTypeDesc.of(ConstantDescs.CD_void);
+
+            private final HashSet<Label> resolvedLabels = new HashSet<>();
+
+            @Override
+            public void accept(CodeBuilder cob, CodeElement coe) {
+                switch (coe) {
+                    case LabelTarget lt -> resolvedLabels.add(lt.label());
+                    case BranchInstruction br -> {
+                        if (resolvedLabels.contains(br.target()))
+                            cob.invokestatic(THREAD_STOPPER_CLASS, THREAD_STOPPER_METHOD_NAME, THREAD_STOPPER_METHOD_TYPE);
+                    }
+                    default -> {}
+                }
+                cob.with(coe);
+            }
         }
 
         private void listenForNewClassFile(OutputMemoryJavaFileObject jfo, JavaFileManager.Location location,
